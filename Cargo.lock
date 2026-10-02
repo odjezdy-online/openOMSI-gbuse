@@ -609,6 +609,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "buse-engine"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "buse-plugin"
+version = "0.1.0"
+dependencies = [
+ "buse-engine",
+]
+
+[[package]]
+name = "buse-tools"
+version = "0.1.0"
+dependencies = [
+ "buse-engine",
+ "buse-plugin",
+ "mlua",
+ "png 0.17.16",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3198,6 +3222,7 @@ dependencies = [
  "android_logger",
  "anyhow",
  "arboard",
+ "buse-plugin",
  "clap",
  "ct2rs",
  "env_logger",

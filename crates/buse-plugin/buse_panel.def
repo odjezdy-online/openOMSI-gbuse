@@ -1,0 +1,8 @@
+LIBRARY buse_panel
+EXPORTS
+    PluginStart
+    PluginFinalize
+    AccessVariable
+    AccessStringVariable
+    AccessSystemVariable
+    AccessTrigger

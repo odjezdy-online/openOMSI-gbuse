@@ -6,22 +6,33 @@ use omsi_plugin::{HostConfig, InfoValue, PluginIo, Plugins};
 use omsi_script::Host;
 use omsi_script::SysVar;
 
-/// Load every plugin of every content root (`OMSI_NO_PLUGINS=1` leaves them out).
-pub(crate) fn load() -> Plugins {
+/// The `plugins` folders of the content roots.
+fn plugin_dirs() -> Vec<std::path::PathBuf> {
     if omsi_cfg::env::var_os("OMSI_NO_PLUGINS").is_some() {
-        return Plugins::default();
+        return Vec::new();
     }
     // (never from content another machine sent: a LAN host's mods are data only)
-    let dirs: Vec<std::path::PathBuf> = omsi_cfg::content_roots()
+    omsi_cfg::content_roots()
         .iter()
         .filter(|r| !omsi_cfg::is_sandbox(r))
         .filter_map(|r| omsi_plugin::resolve_path(r, "plugins"))
         .filter(|d| d.is_dir())
-        .collect();
+        .collect()
+}
+
+/// Load every plugin of every content root (`OMSI_NO_PLUGINS=1` leaves them out). The BUSE
+/// panel plugin is not loaded as a library: the game draws its panels itself (`buse`).
+pub(crate) fn load() -> Plugins {
+    let dirs = plugin_dirs();
     if dirs.is_empty() {
         return Plugins::default();
     }
-    Plugins::load(&dirs, &HostConfig::detect())
+    Plugins::load_except(&dirs, &HostConfig::detect(), &|opl| crate::buse::is_buse_dll(&opl.dll))
+}
+
+/// The BUSE panels of the content roots' `plugins` folders.
+pub(crate) fn load_buse() -> crate::buse::Buse {
+    crate::buse::Buse::load(&plugin_dirs())
 }
 
 /// The game's side of a plugin frame: the player's bus, when there is one.

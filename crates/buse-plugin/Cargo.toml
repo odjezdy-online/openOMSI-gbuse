@@ -1,0 +1,21 @@
+[package]
+name = "buse-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OMSI 2 / openOMSI plugin (.opl + DLL) for the BUSE inner LED panel"
+
+[lib]
+name = "buse_panel"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+buse-engine = { path = "../buse-engine" }
+
+[features]
+# the tests that read gBUSE databases: BUSE_DATA=<folder with data/ and reference/> cargo test -p buse-plugin --features buse-data
+buse-data = []
+
+[[test]]
+name = "plugin"
+required-features = ["buse-data"]
