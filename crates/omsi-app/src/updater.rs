@@ -1,4 +1,5 @@
-//! Updates from the project's GitHub releases (github.com/openOMSI-Project/openOMSI).
+//! Updates from the project's GitHub releases (github.com/odjezdy-online/openOMSI-gbuse: the
+//! builds with the BUSE panels, so that an update does not take them away again).
 //!
 //! Every push to main publishes a release `v<MAJOR.MINOR.COMMIT>` with one archive per
 //! platform (see .github/workflows/release.yml). The launcher asks the GitHub API for the
@@ -31,9 +32,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The project on GitHub.
-pub const REPO: &str = "openOMSI-Project/openOMSI";
-pub const REPO_URL: &str = "https://github.com/openOMSI-Project/openOMSI";
-const LATEST_API: &str = "https://api.github.com/repos/openOMSI-Project/openOMSI/releases/latest";
+pub const REPO: &str = "odjezdy-online/openOMSI-gbuse";
+pub const REPO_URL: &str = "https://github.com/odjezdy-online/openOMSI-gbuse";
+const LATEST_API: &str = "https://api.github.com/repos/odjezdy-online/openOMSI-gbuse/releases/latest";
 
 /// A release newer than this build, with the file for this platform.
 #[derive(Clone, Debug, PartialEq)]
