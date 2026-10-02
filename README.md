@@ -30,6 +30,11 @@ and fully compatible with the existing maps, buses, scenery and mods.
 > plays on the maps, vehicles and other files of an installed OMSI 2 and **will not start without one**.
 
 
+> **This is openOMSI with the BUSE information panels built in** (inner LED panel, front, side
+> and rear panels fed by gBUSE databases). Everything else is upstream
+> [openOMSI](https://github.com/openOMSI-Project/openOMSI); what is added is described in
+> [docs/BUSE_PANELS.md](docs/BUSE_PANELS.md).
+
 ## Download
 
 Every commit to `main` is built by GitHub Actions and published on the

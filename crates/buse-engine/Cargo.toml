@@ -1,0 +1,27 @@
+[package]
+name = "buse-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "BUSE BS120/BS190 inner LED panel engine fed by gBUSE1 databases (no I/O, deterministic)"
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+# the tests that read gBUSE databases: BUSE_DATA=<folder with data/ and reference/> cargo test -p buse-engine --features buse-data
+buse-data = []
+
+[[test]]
+name = "golden"
+required-features = ["buse-data"]
+
+[[test]]
+name = "outer"
+required-features = ["buse-data"]
+
+[[test]]
+name = "panel"
+required-features = ["buse-data"]

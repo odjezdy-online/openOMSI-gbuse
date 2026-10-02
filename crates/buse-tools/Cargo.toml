@@ -1,0 +1,23 @@
+[package]
+name = "buse-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "gbuse-convert, buse-preview, buse-sim: tools around the BUSE panel engine"
+
+[dependencies]
+buse-engine = { path = "../buse-engine" }
+buse-plugin = { path = "../buse-plugin" }
+png = "0.17"
+
+[dev-dependencies]
+# Lua 5.4 přeložená ze zdrojáků: Lua testy běží z `cargo test`, interpret se neinstaluje.
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+
+[features]
+# the tests that read gBUSE databases: BUSE_DATA=<folder with data/ and reference/> cargo test -p buse-tools --features buse-data
+buse-data = []
+
+[[test]]
+name = "lua"
+required-features = ["buse-data"]

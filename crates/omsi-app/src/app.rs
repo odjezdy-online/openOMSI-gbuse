@@ -312,6 +312,8 @@ pub(crate) struct App {
     pub(crate) cpu_mark: Option<(f64, Instant, u32)>,
     /// The OMSI plugins (`plugins/*.opl`), loaded with the first frame.
     pub(crate) plugins: Option<omsi_plugin::Plugins>,
+    /// The BUSE panels the game draws itself (`buse`), loaded with the first frame.
+    pub(crate) buse: Option<crate::buse::Buse>,
     /// The on-screen controls of a phone (see `touch.rs`).
     pub(crate) touch: crate::touch::Touch,
 }

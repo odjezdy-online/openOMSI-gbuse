@@ -1386,6 +1386,13 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+                // the BUSE panels, as a plugin's frame: the bus's scripts are done, and they
+                // put the frame the panels made into their script textures in the next one
+                let buse = self.buse.get_or_insert_with(crate::plugins::load_buse);
+                if !buse.is_empty() && !self.paused {
+                    let mut io = crate::plugins::Io { vehicle: self.player.as_mut().map(|p| &mut p.vehicle), dt, message: None, info: Vec::new(), commands: Vec::new(), keys: Vec::new() };
+                    buse.frame(&mut io);
+                }
                 // the plugins' frame, with the bus's scripts done
                 let plugins = self.plugins.get_or_insert_with(crate::plugins::load);
                 if !plugins.is_empty() && !self.paused {

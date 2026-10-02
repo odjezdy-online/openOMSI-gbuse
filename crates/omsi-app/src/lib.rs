@@ -93,6 +93,7 @@ mod traffic_link;
 mod tutorial;
 mod weather_setup;
 mod weather_cycle;
+mod buse;
 mod world_load;
 
 // the interface's translations (locales/app.yml; the English text is the key)
@@ -551,6 +552,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         service_msg: clock_note.map(|m| (m, 10.0)),
         log_state: Default::default(),
         plugins: None,
+        buse: None,
         career: Default::default(),
         wetness: 0.0,
         cloud_drift: [0.0; 2],

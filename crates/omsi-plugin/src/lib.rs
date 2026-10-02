@@ -678,12 +678,21 @@ impl Plugins {
     /// Load the plugins of each `plugins` folder given (the first folder's copy of an
     /// `.opl` name wins).
     pub fn load(dirs: &[PathBuf], hosts: &HostConfig) -> Plugins {
+        Plugins::load_except(dirs, hosts, &|_| false)
+    }
+
+    /// As [`Plugins::load`], leaving out the `.opl` files `skip` names (what the game does
+    /// itself: the BUSE panels).
+    pub fn load_except(dirs: &[PathBuf], hosts: &HostConfig, skip: &dyn Fn(&Opl) -> bool) -> Plugins {
         let mut loaded: Vec<Plugin> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for dir in dirs {
             for opl in find_opls(dir) {
                 let key = opl.strip_prefix(dir).unwrap_or(&opl).to_string_lossy().to_ascii_lowercase();
                 if !seen.insert(key) {
+                    continue;
+                }
+                if std::fs::read(&opl).is_ok_and(|t| skip(&parse_opl(&String::from_utf8_lossy(&t)))) {
                     continue;
                 }
                 match Plugin::load(&opl, dir, hosts) {
