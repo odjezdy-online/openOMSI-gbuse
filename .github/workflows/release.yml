@@ -265,7 +265,7 @@ jobs:
             echo "Small changes and fixes." > changes.md
           fi
           cat > notes.md <<NOTES
-          **openOMSI $VERSION**
+          **openOMSI gbuse $VERSION** - openOMSI with the BUSE panels built in (docs/BUSE_PANELS.md)
 
           > **Early release, expect bugs.** openOMSI needs an original OMSI 2 installation to run; it contains no game content.
 
@@ -293,10 +293,10 @@ jobs:
             # the same version built again (main was rewritten and pushed once more): the
             # release stays, with this build's files and notes
             gh release upload "v$VERSION" out/*.zip out/*.apk --clobber
-            gh release edit "v$VERSION" --title "openOMSI $VERSION" --notes-file notes.md
+            gh release edit "v$VERSION" --title "openOMSI gbuse $VERSION" --notes-file notes.md
           else
             gh release create "v$VERSION" out/*.zip out/*.apk \
               --verify-tag \
-              --title "openOMSI $VERSION" \
+              --title "openOMSI gbuse $VERSION" \
               --notes-file notes.md
           fi
