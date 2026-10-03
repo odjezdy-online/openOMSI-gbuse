@@ -199,9 +199,15 @@ fn folder_flag(rel: &str) -> Option<bool> {
 }
 
 fn collect(args: &Args) -> (Manifest, Vec<PathBuf>) {
+    collect_parts(&args.map, args.bus.as_deref(), args.weather.as_deref(), &args.root)
+}
+
+/// The files of a session's map, bus and weather that are not stock content (`map` empty:
+/// no map - a player's own bus alone).
+fn collect_parts(map: &str, bus: Option<&str>, weather: Option<&str>, root: &Path) -> (Manifest, Vec<PathBuf>) {
     let policy = share_policy();
     let t0 = Instant::now();
-    let original = args.root.clone();
+    let original = root.to_path_buf();
     // (lower-case relative path) -> (spelling, source)
     let mut files: HashMap<String, (String, PathBuf)> = HashMap::new();
     let mut folders_done: HashSet<String> = HashSet::new();
@@ -289,16 +295,16 @@ fn collect(args: &Args) -> (Manifest, Vec<PathBuf>) {
             add_folder(&rel, &original, files, text_todo, 0);
         }
     };
-    let map_dir = norm(Path::new(&args.map).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default().as_str());
+    let map_dir = norm(Path::new(map).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default().as_str());
     if !map_dir.is_empty() {
         want_folder(map_dir.clone(), &mut files, &mut text_todo);
     }
-    if let Some(b) = args.bus.as_deref() {
+    if let Some(b) = bus {
         if let Some(f) = owner_folder(&norm(b)) {
             want_folder(f, &mut files, &mut text_todo);
         }
     }
-    if let Some(w) = args.weather.as_deref() {
+    if let Some(w) = weather {
         let w = norm(w);
         if let Some((root, path)) = omsi_cfg::find_in_roots(&w) {
             if root != original {
@@ -310,7 +316,7 @@ fn collect(args: &Args) -> (Manifest, Vec<PathBuf>) {
     // the map's tiles and lists, and every text file of what they bring: the objects,
     // splines, vehicles and people they name, with the folders those name in turn
     let mut map_texts: Vec<(String, PathBuf)> = Vec::new();
-    for r in omsi_cfg::content_roots() {
+    for r in omsi_cfg::content_roots().into_iter().filter(|_| !map_dir.is_empty()) {
         let comps = omsi_cfg::windows_components(&map_dir);
         let dir = comps.iter().fold(r.clone(), |p, c| p.join(c));
         for (name, is_dir) in omsi_cfg::vfs::list_dir(&dir).unwrap_or_default() {
@@ -440,7 +446,7 @@ fn collect(args: &Args) -> (Manifest, Vec<PathBuf>) {
         t0.elapsed().as_secs_f64()
     );
     (
-        Manifest { map: args.map.replace('\\', "/"), bus: args.bus.clone().unwrap_or_default().replace('\\', "/"), entries },
+        Manifest { map: map.replace('\\', "/"), bus: bus.unwrap_or_default().replace('\\', "/"), entries },
         sources,
     )
 }
@@ -470,6 +476,13 @@ pub fn serve(port: u16, session: u64, args: &Args) {
             .ok();
     }
     log::info!("LAN mods: serving this session's mods on TCP port {port}");
+    serve_listener(listener, session, ready);
+}
+
+type Ready = Arc<Mutex<Option<Arc<(Manifest, Vec<PathBuf>)>>>>;
+
+/// Answer the connections of `listener` with the list `ready` holds (once it holds one).
+fn serve_listener(listener: TcpListener, session: u64, ready: Ready) {
     std::thread::Builder::new()
         .name("lan-mods".into())
         .spawn(move || {
@@ -496,6 +509,49 @@ pub fn serve(port: u16, session: u64, args: &Args) {
             }
         })
         .ok();
+}
+
+/// A player's own bus for the others (`share = yes` in its folder, see `may_share`): its
+/// files on a TCP port of its own, which the player tells the others in its INFO. Every
+/// player has one - a client's bus is not in the host's list. The list is made again when
+/// the player changes buses.
+pub struct VehicleServer {
+    pub port: u16,
+    ready: Ready,
+    bus: String,
+}
+
+impl VehicleServer {
+    pub fn start(session: u64, root: &Path, bus: &str) -> Option<VehicleServer> {
+        if omsi_cfg::env::var_os("OMSI_NO_LAN_MODS").is_some() {
+            return None;
+        }
+        let listener = TcpListener::bind(("0.0.0.0", 0)).map_err(|e| log::warn!("LAN mods: no port for our own bus: {e}")).ok()?;
+        let port = listener.local_addr().ok()?.port();
+        let ready: Ready = Arc::new(Mutex::new(None));
+        serve_listener(listener, session, ready.clone());
+        let mut s = VehicleServer { port, ready, bus: String::new() };
+        s.set_bus(root, bus);
+        log::info!("LAN mods: our own bus is offered on TCP port {port}");
+        Some(s)
+    }
+
+    /// The bus driven now (the list is made in the background; an empty one until then).
+    pub fn set_bus(&mut self, root: &Path, bus: &str) {
+        if self.bus == bus {
+            return;
+        }
+        self.bus = bus.to_string();
+        *self.ready.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let (ready, root, bus) = (self.ready.clone(), root.to_path_buf(), bus.to_string());
+        std::thread::Builder::new()
+            .name("lan-mods-bus".into())
+            .spawn(move || {
+                let m = if bus.is_empty() { (Manifest::default(), Vec::new()) } else { collect_parts("", Some(&bus), None, &root) };
+                *ready.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(m));
+            })
+            .ok();
+    }
 }
 
 /// Connections the mods server serves at once.
@@ -609,6 +665,52 @@ pub fn remove_stale() {
             let _ = std::fs::remove_dir_all(e.path());
             log::info!("LAN mods: removed the content of an old session ({name})");
         }
+    }
+    trim_store();
+}
+
+/// Keep the downloads kept between sessions (`lan-store`) under `OMSI_LAN_STORE_GB` (20 GB
+/// by default): what was used longest ago goes first (a file is touched when a session
+/// takes it from the store). Left-over `.part` files go as well.
+fn trim_store() {
+    let Some(store) = store_dir() else { return };
+    let Ok(rd) = std::fs::read_dir(&store) else { return };
+    let limit = omsi_cfg::env::var("OMSI_LAN_STORE_GB").ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| *v >= 0.0).unwrap_or(20.0);
+    let limit = (limit * 1e9) as u64;
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "part") {
+            let _ = std::fs::remove_file(&p);
+            continue;
+        }
+        if let Some(md) = e.metadata().ok().filter(|m| m.is_file()) {
+            files.push((md.modified().unwrap_or(std::time::UNIX_EPOCH), md.len(), p));
+        }
+    }
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total <= limit {
+        return;
+    }
+    files.sort_by_key(|f| f.0);
+    let (mut gone, mut freed) = (0usize, 0u64);
+    for (_, len, p) in files {
+        if total <= limit {
+            break;
+        }
+        if std::fs::remove_file(&p).is_ok() {
+            total -= len;
+            freed += len;
+            gone += 1;
+        }
+    }
+    log::info!("LAN mods: the kept downloads were over {:.0} GB: {gone} files ({:.1} GB) used longest ago removed", limit as f64 / 1e9, freed as f64 / 1e9);
+}
+
+/// Mark a stored file as used now (for `trim_store`).
+fn touch(stored: &Path) {
+    if let Ok(f) = std::fs::File::options().write(true).open(stored) {
+        let _ = f.set_modified(std::time::SystemTime::now());
     }
 }
 
@@ -734,6 +836,20 @@ fn place(stored: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 pub fn fetch(args: &mut Args, host: SocketAddr, session: u64, progress: &mut dyn FnMut(u64, u64, &str)) -> Result<Report, String> {
+    let (report, manifest) = fetch_from(host, session, progress)?;
+    // the host's map (now that we have it)
+    let map_ok = refuse_path(&manifest.map).is_none() && omsi_cfg::find_in_roots(&manifest.map).is_some();
+    if map_ok && !manifest.map.is_empty() && !manifest.map.eq_ignore_ascii_case(&args.map.replace('\\', "/")) {
+        log::info!("LAN mods: the session is on the host's map {}", manifest.map);
+        args.map = manifest.map.clone();
+    }
+    Ok(report)
+}
+
+/// Fetch what a mods server at `host` lists and this machine lacks into the session folder
+/// (made a content root, searched first, never a source of plugins): the host's session,
+/// or another player's own bus (`VehicleServer`).
+pub fn fetch_from(host: SocketAddr, session: u64, progress: &mut dyn FnMut(u64, u64, &str)) -> Result<(Report, Manifest), String> {
     if omsi_cfg::env::var_os("OMSI_NO_LAN_MODS").is_some() {
         return Err("switched off (OMSI_NO_LAN_MODS)".into());
     }
@@ -816,6 +932,7 @@ pub fn fetch(args: &mut Args, host: SocketAddr, session: u64, progress: &mut dyn
         // fetched at an earlier join
         let stored = store.join(&e.sha256);
         if std::fs::metadata(&stored).map(|m| m.len() == e.size).unwrap_or(false) && place(&stored, &target_of(e)).is_ok() {
+            touch(&stored);
             report.had += 1;
             continue;
         }
@@ -926,18 +1043,14 @@ pub fn fetch(args: &mut Args, host: SocketAddr, session: u64, progress: &mut dyn
     // the session folder is content like any other, searched first, and never a source of
     // plugins
     omsi_cfg::mark_sandbox(dir.clone());
-    omsi_cfg::add_content_root_first(dir.clone());
-    // the host's map (now that we have it)
-    let map_ok = refuse_path(&manifest.map).is_none() && omsi_cfg::find_in_roots(&manifest.map).is_some();
-    if map_ok && !manifest.map.is_empty() && !manifest.map.eq_ignore_ascii_case(&args.map.replace('\\', "/")) {
-        log::info!("LAN mods: the session is on the host's map {}", manifest.map);
-        args.map = manifest.map.clone();
+    if !omsi_cfg::content_roots().contains(&dir) {
+        omsi_cfg::add_content_root_first(dir.clone());
     }
     if !report.refused.is_empty() {
         log::warn!("LAN mods: {} files refused: {}", report.refused.len(), report.refused.iter().take(8).cloned().collect::<Vec<_>>().join("; "));
     }
     log::info!("LAN mods: fetched {} files ({:.1} MB), {} were here already", report.fetched, report.bytes as f64 / 1e6, report.had);
-    Ok(report)
+    Ok((report, manifest))
 }
 
 #[cfg(test)]

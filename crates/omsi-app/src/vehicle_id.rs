@@ -54,6 +54,11 @@ pub fn warm_up(root: &Path) {
     });
 }
 
+/// Are this machine's vehicles fingerprinted (`find` answers for good)?
+pub fn ready() -> bool {
+    INDEX.get().is_some()
+}
+
 /// The vehicle file of this machine with that fingerprint. None as well while the
 /// fingerprints are still being taken (the caller tries again later).
 pub fn find(fingerprint: &str, root: &Path) -> Option<PathBuf> {

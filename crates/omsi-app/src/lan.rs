@@ -572,6 +572,14 @@ pub struct LanGame {
     /// tried: tried again only after a while (every frame, a server read a big add-on bus
     /// it could not load over and over and stood still for everybody).
     failed: hashbrown::HashMap<(u32, String), std::time::Instant>,
+    /// Our own bus for the others to fetch (`lan_mods::VehicleServer`), once tried.
+    vehicle_server: Option<crate::lan_mods::VehicleServer>,
+    vehicle_server_tried: bool,
+    /// Other players' buses being fetched from them: the bus and what the fetch came to
+    /// (files, bytes).
+    downloads: hashbrown::HashMap<u32, (String, std::sync::mpsc::Receiver<Result<(usize, u64), String>>)>,
+    /// (player, bus) fetched or given up: not asked for again this session.
+    fetched: hashbrown::HashSet<(u32, String)>,
 }
 
 /// What the frame knows that LAN play needs.
@@ -1684,6 +1692,8 @@ pub fn my_pose(
         name: String::new(),
         bus: content_relative(&v.ty.def.path, &args.root),
         bus_id: crate::vehicle_id::of_file(&v.ty.def.path),
+        // (set by `tick` when our own bus is offered)
+        mods: String::new(),
         // the paint the bus has now: chosen at the start, for a bus placed later or changed
         // in the game (sent as the start's `--paint` only, a placed bus went without one)
         paint: v.host.paint_scheme.flatten().and_then(|i| v.ty.paint_schemes.get(i)).map(|s| s.name.clone()).unwrap_or_else(|| paint_name(args, &v.ty)),
@@ -2213,6 +2223,63 @@ fn remote_bus_file(args: &Args, bus: &str) -> Result<PathBuf, String> {
         return Err(format!("{} bytes is too much for a vehicle file", md.len()));
     }
     Ok(path)
+}
+
+/// Another player's bus that this machine lacks (not by its path, not by its fingerprint):
+/// fetched from the player's own `VehicleServer` in the background, once per player and
+/// bus. True when a fetch has just brought files: the stand-in is then made again.
+fn fetch_remote_bus(lan: &LanSession, game: &mut LanGame, args: &Args, pose: &Pose) -> bool {
+    let key = (pose.id, pose.bus.clone());
+    if let Some((bus, rx)) = game.downloads.get(&pose.id) {
+        let bus = bus.clone();
+        let res = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the download stopped".into()),
+        };
+        game.downloads.remove(&pose.id);
+        game.fetched.insert((pose.id, bus.clone()));
+        let who = if pose.name.trim().is_empty() { format!("player {}", pose.id) } else { pose.name.trim().to_string() };
+        return match res {
+            Ok((files, bytes)) if files > 0 => {
+                log::info!("LAN: fetched {who}'s {bus}: {files} files, {:.1} MB", bytes as f64 / 1e6);
+                game.chat.push(format!("* {who}'s bus fetched ({:.0} MB)", bytes as f64 / 1e6));
+                true
+            }
+            Ok(_) => {
+                log::info!("LAN: {who} does not pass {bus} on (or it is all here already)");
+                false
+            }
+            Err(e) => {
+                log::warn!("LAN: {who}'s {bus} could not be fetched: {e}");
+                game.chat.push(format!("* {who}'s bus could not be fetched: {e}"));
+                false
+            }
+        };
+    }
+    if game.fetched.contains(&key) || !crate::vehicle_id::ready() {
+        return false;
+    }
+    let lacking = game.remotes.get(&pose.id).map_or(game.failed.contains_key(&key), |rv| rv.stand_in);
+    if !lacking || remote_bus_file(args, &pose.bus).is_ok() || crate::vehicle_id::find(&pose.bus_id, &args.root).is_some() {
+        return false;
+    }
+    // (no address yet: its first INFO may come before its server runs - waited for)
+    let Ok(addr) = pose.mods.parse::<SocketAddr>() else {
+        return false;
+    };
+    log::info!("LAN: fetching {} from player {} ({addr})", pose.bus, pose.id);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let session = lan.session;
+    std::thread::Builder::new()
+        .name("lan-mods-fetch-bus".into())
+        .spawn(move || {
+            let r = crate::lan_mods::fetch_from(addr, session, &mut |_, _, _| {}).map(|(r, _)| (r.fetched, r.bytes));
+            let _ = tx.send(r);
+        })
+        .ok();
+    game.downloads.insert(pose.id, (pose.bus.clone(), rx));
+    false
 }
 
 /// Load the type a remote player drives, or a stand-in: ours, or on a server the first of
@@ -2836,6 +2903,17 @@ pub fn tick(
     let mut mine = my_pose(game, player.as_deref(), args, duty, frame.riders);
     mine.tour = frame.tour.clone().unwrap_or_default();
     mine.walker = frame.walker;
+    // our own bus, for the others who lack it (what its folder lets go: `lan_mods::may_share`)
+    if !mine.bus.is_empty() {
+        if !game.vehicle_server_tried {
+            game.vehicle_server_tried = true;
+            game.vehicle_server = crate::lan_mods::VehicleServer::start(lan.session, &args.root, &mine.bus);
+        }
+        if let Some(s) = game.vehicle_server.as_mut() {
+            s.set_bus(&args.root, &mine.bus);
+            mine.mods = format!(":{}", s.port);
+        }
+    }
     if lan.role == Role::Host {
         // the tours the others drive are theirs, not the timetable's
         let tours: hashbrown::HashSet<(String, String)> = lan
@@ -3009,6 +3087,14 @@ pub fn tick(
             if let Some(rv) = game.remotes.remove(&pose.id) {
                 release(r, scene, w, frame.audio, rv);
             }
+        }
+        // a bus we lack, fetched from the player who drives it: meanwhile a stand-in (or
+        // nothing, on foot), afterwards the bus itself
+        if fetch_remote_bus(lan, game, args, &pose) {
+            if let Some(rv) = game.remotes.remove(&pose.id) {
+                release(r, scene, w, frame.audio, rv);
+            }
+            game.failed.remove(&(pose.id, pose.bus.clone()));
         }
         if !game.remotes.contains_key(&pose.id) {
             let key = (pose.id, pose.bus.clone());

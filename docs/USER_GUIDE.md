@@ -497,6 +497,20 @@ takes the host a while after it starts (Novi Sad, 27 000 files: 20 s on a fast c
 for it. Maps installed straight into the OMSI 2 folder are not passed on: both players need
 them.
 
+**Every player's bus, paid mods and the cache** (this fork). What may be passed on at all
+says the mod itself: an `openomsi-share.cfg` in its folder with `share = yes` or `share =
+no`. A vehicle goes to the others only with `share = yes` - paid and private buses stay with
+their owners; a map and its objects go unless their folder says `share = no`
+(`OMSI_LAN_SHARE=all` or `none` decides for the whole session instead). Every player offers
+its own bus that way on a TCP port of its own, told to the others in its info; a player who
+lacks another's bus fetches it in the background, sees a stand-in meanwhile and the bus
+itself once it is there (`* Kuba's bus fetched (230 MB)` in the chat). Before that the bus
+is looked for among this machine's own vehicles by the fingerprint of its `.bus` file, so
+the same bus in a folder of another name is found and nothing is fetched. The paint sent is
+the one the bus has (also one placed or repainted in the game). Downloads are kept in
+`~/.openomsi/lan-store` by their SHA-256, up to `OMSI_LAN_STORE_GB` (20 GB by default; what
+was used longest ago goes first), so the next session with the same people fetches nothing.
+
 **One world.** The host simulates the AI traffic, the timetable buses, the people on the
 pavements and at the stops, the riders of the timetable buses and the traffic lights for
 everybody, around every player (it loads the ground and fills the streets around the

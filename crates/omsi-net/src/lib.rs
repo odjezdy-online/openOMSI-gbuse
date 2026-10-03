@@ -861,6 +861,10 @@ pub struct Pose {
     /// The fingerprint of the vehicle file (16 hex digits of its SHA-256): the others find
     /// the same bus by it when theirs lies in a folder of another name. Empty: not told.
     pub bus_id: String,
+    /// Where the player's own bus can be fetched (its `VehicleServer` in the game): the
+    /// player sends `:port`, the host passes it on as `ip:port` with the address the player's
+    /// datagrams come from. Empty: not offered.
+    pub mods: String,
     pub x: f64,
     pub y: f64,
     pub z: f64,
@@ -930,6 +934,16 @@ pub struct Aboard {
     pub seat: Option<u16>,
 }
 
+/// A `mods` field as it may be sent: `:port` or `ip:port` (an address the host saw), or
+/// empty.
+fn clean_mods(s: &str) -> String {
+    let s = s.trim();
+    if let Some(p) = s.strip_prefix(':') {
+        return p.parse::<u16>().ok().filter(|p| *p != 0).map(|p| format!(":{p}")).unwrap_or_default();
+    }
+    s.parse::<SocketAddr>().ok().filter(|a| a.port() != 0).map(|a| a.to_string()).unwrap_or_default()
+}
+
 impl Pose {
     /// Does this pose carry a vehicle (rather than being a player's heartbeat)?
     pub fn has_vehicle(&self) -> bool {
@@ -960,8 +974,9 @@ impl Pose {
         // the `[matl_freetex]` pictures, in what room is left (an older game reads the
         // fields it knows and passes this one by), and the vehicle file's fingerprint
         let id: String = self.bus_id.chars().filter(|c| c.is_ascii_hexdigit()).take(16).collect();
-        let room = MAX_DATAGRAM.saturating_sub(info.len() + 2 + id.len());
-        format!("{info}|{}|{id}", encode_texts(&self.freetex, MAX_FREETEX, MAX_FREETEX_LEN, room))
+        let mods = clean_mods(&self.mods);
+        let room = MAX_DATAGRAM.saturating_sub(info.len() + 3 + id.len() + mods.len());
+        format!("{info}|{}|{id}|{mods}", encode_texts(&self.freetex, MAX_FREETEX, MAX_FREETEX_LEN, room))
     }
 
     /// The info fields of an `INFO` message (checked and cleaned), or None.
@@ -992,6 +1007,7 @@ impl Pose {
             figure: parts.get(13).and_then(|f| human_path(f)).unwrap_or_default(),
             freetex: parts.get(14).map(|t| decode_texts(t, MAX_FREETEX, MAX_FREETEX_LEN)).unwrap_or_default(),
             bus_id: parts.get(15).map(|t| t.trim()).filter(|t| t.len() == 16 && t.bytes().all(|b| b.is_ascii_hexdigit())).map(|t| t.to_ascii_lowercase()).unwrap_or_default(),
+            mods: parts.get(16).map(|t| clean_mods(t)).unwrap_or_default(),
             ..Default::default()
         })
     }
@@ -1012,6 +1028,7 @@ impl Pose {
         self.box_offset = info.box_offset;
         self.table = info.table;
         self.bus_id = info.bus_id.clone();
+        self.mods = info.mods.clone();
     }
 
     /// Take the state of `s`, keeping the who-and-what.
@@ -1033,6 +1050,7 @@ impl Pose {
             box_offset: keep.box_offset,
             table: keep.table,
             bus_id: keep.bus_id,
+            mods: keep.mods,
             ..s
         };
     }
@@ -2791,6 +2809,12 @@ impl LanSession {
                 }
             };
             let mut info = info;
+            // the player's own bus server: at the address its datagrams come from (what it
+            // says of an address is not taken, only the port); a client takes the address the
+            // host passed on, and the host's own (`:port`) at the host's address
+            if host || info.mods.starts_with(':') {
+                info.mods = info.mods.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok()).filter(|p| *p != 0).map(|p| SocketAddr::new(from.ip(), p).to_string()).unwrap_or_default();
+            }
             // a player keeps the name it joined with unless it sends one
             if info.name.is_empty() {
                 info.name = peer.pose.name.clone();

@@ -77,7 +77,8 @@ fn info_carries_the_freetex_pictures_and_an_older_info_has_none() {
     assert_eq!(q.freetex, p.freetex);
     assert_eq!(q.texts, p.texts);
     // an older game's INFO ends with the figure: no pictures, everything else as before
-    let older = text.rsplit_once('|').unwrap().0.rsplit_once('|').unwrap().0;
+    // (the pictures, the fingerprint and the bus's address are the last three fields)
+    let older = text.rsplitn(4, '|').last().unwrap();
     let q = Pose::decode_info(&older.split('|').collect::<Vec<_>>()).unwrap();
     assert!(q.freetex.is_empty());
     assert_eq!(q.texts, p.texts);
@@ -97,7 +98,7 @@ fn info_carries_the_vehicle_files_fingerprint() {
     let q = Pose::decode_info(&text.split('|').collect::<Vec<_>>()).unwrap();
     assert_eq!(q.bus_id, "0123456789abcdef");
     // a game that sends none (an older one), and nonsense in its place
-    let older = text.rsplit_once('|').unwrap().0;
+    let older = text.rsplitn(3, '|').last().unwrap();
     assert_eq!(Pose::decode_info(&older.split('|').collect::<Vec<_>>()).unwrap().bus_id, "");
     let odd = format!("{older}|../../x");
     assert_eq!(Pose::decode_info(&odd.split('|').collect::<Vec<_>>()).unwrap().bus_id, "");
@@ -1507,4 +1508,21 @@ fn reconnect_tries_again_after_the_host_sent_us_away() {
     assert!(until_connected(&mut c, &mut host));
     // a host has nothing to reconnect to
     assert!(!host.reconnect());
+}
+
+
+#[test]
+fn info_carries_where_the_players_own_bus_is_offered() {
+    let mut p = pose(1.5);
+    p.mods = ":51234".into();
+    let q = Pose::decode_info(&p.encode_info().split('|').collect::<Vec<_>>()).unwrap();
+    assert_eq!(q.mods, ":51234");
+    p.mods = "10.0.0.7:51234".into();
+    let q = Pose::decode_info(&p.encode_info().split('|').collect::<Vec<_>>()).unwrap();
+    assert_eq!(q.mods, "10.0.0.7:51234");
+    for odd in ["", ":0", ":x", "file:///etc", "host:12"] {
+        p.mods = odd.into();
+        let q = Pose::decode_info(&p.encode_info().split('|').collect::<Vec<_>>()).unwrap();
+        assert_eq!(q.mods, "", "{odd}");
+    }
 }
