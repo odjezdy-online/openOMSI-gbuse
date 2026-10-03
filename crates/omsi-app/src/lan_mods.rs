@@ -19,6 +19,15 @@
 //! called). OMSI's own vehicle scripts are data for the game's own interpreter, which
 //! touches nothing outside the vehicle. No plugin is ever loaded from the session folder
 //! (`omsi_cfg::mark_sandbox`).
+//!
+//! What may be passed on at all: a mod says so with an `openomsi-share.cfg` in its folder
+//! (`share = yes` or `share = no`). A vehicle goes only with `share = yes` - paid and
+//! private buses must not reach everybody who joins, and a vehicle cannot be told apart by
+//! its files; a map and the objects it needs go unless their folder says `share = no`. The
+//! host may decide otherwise for the whole session: `OMSI_LAN_SHARE=all` (everything that
+//! does not say no) or `none` (nothing). A vehicle not passed on is drawn by the others as
+//! theirs where they have it (also under another folder name, `vehicle_id`), else as a
+//! stand-in.
 
 use crate::Args;
 use sha2::{Digest, Sha256};
@@ -135,7 +144,62 @@ fn is_original(r: &Path, original: &Path) -> bool {
 
 /// The files the host's session uses that are not stock content, with where each is read
 /// from (a folder or a mounted archive).
+/// The host's rule for the whole session (`OMSI_LAN_SHARE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharePolicy {
+    /// What a mod's `openomsi-share.cfg` allows; vehicles only with `share = yes`.
+    Marked,
+    /// Everything that does not say `share = no`.
+    All,
+    Nothing,
+}
+
+pub fn share_policy() -> SharePolicy {
+    match omsi_cfg::env::var("OMSI_LAN_SHARE").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Ok("all") => SharePolicy::All,
+        Ok("none") | Ok("no") | Ok("0") => SharePolicy::Nothing,
+        _ => SharePolicy::Marked,
+    }
+}
+
+/// What a folder's `openomsi-share.cfg` says: `share = yes` / `no` (None: no file, or no
+/// such line).
+pub fn share_flag(text: &str) -> Option<bool> {
+    text.lines().find_map(|l| {
+        let l = l.split(['#', ';']).next().unwrap_or("");
+        let (k, v) = l.split_once('=')?;
+        if !k.trim().eq_ignore_ascii_case("share") {
+            return None;
+        }
+        match v.trim().to_ascii_lowercase().as_str() {
+            "yes" | "1" | "true" | "ano" => Some(true),
+            "no" | "0" | "false" | "ne" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+/// May the folder `rel` (`Vehicles/<name>`, `maps/<name>`, an object's folder) go to the
+/// players who join?
+pub fn may_share(policy: SharePolicy, rel: &str, flag: Option<bool>) -> bool {
+    let top = rel.split('/').next().unwrap_or("").to_ascii_lowercase();
+    let vehicle = top == "vehicles" || top == "trains";
+    match policy {
+        SharePolicy::Nothing => false,
+        SharePolicy::All => flag != Some(false),
+        SharePolicy::Marked if vehicle => flag == Some(true),
+        SharePolicy::Marked => flag != Some(false),
+    }
+}
+
+/// The share flag of the folder `rel` as the content roots have it.
+fn folder_flag(rel: &str) -> Option<bool> {
+    let (_, path) = omsi_cfg::find_in_roots(&format!("{rel}/openomsi-share.cfg"))?;
+    omsi_cfg::vfs::read_text(&path).ok().and_then(|t| share_flag(&t))
+}
+
 fn collect(args: &Args) -> (Manifest, Vec<PathBuf>) {
+    let policy = share_policy();
     let t0 = Instant::now();
     let original = args.root.clone();
     // (lower-case relative path) -> (spelling, source)
@@ -218,6 +282,10 @@ fn collect(args: &Args) -> (Manifest, Vec<PathBuf>) {
     };
     let mut want_folder = |rel: String, files: &mut HashMap<String, (String, PathBuf)>, text_todo: &mut Vec<(String, PathBuf)>| {
         if folders_done.insert(rel.to_lowercase()) {
+            if !may_share(policy, &rel, folder_flag(&rel)) {
+                log::info!("LAN mods: {rel} is not passed on (its openomsi-share.cfg, or none for a vehicle; OMSI_LAN_SHARE={policy:?})");
+                return;
+            }
             add_folder(&rel, &original, files, text_todo, 0);
         }
     };
@@ -870,6 +938,28 @@ pub fn fetch(args: &mut Args, host: SocketAddr, session: u64, progress: &mut dyn
     }
     log::info!("LAN mods: fetched {} files ({:.1} MB), {} were here already", report.fetched, report.bytes as f64 / 1e6, report.had);
     Ok(report)
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::*;
+
+    #[test]
+    fn vehicles_go_only_when_their_folder_says_so() {
+        assert_eq!(share_flag("# x
+share = yes
+"), Some(true));
+        assert_eq!(share_flag("Share=NO"), Some(false));
+        assert_eq!(share_flag("author = someone"), None);
+        use SharePolicy::*;
+        assert!(!may_share(Marked, "Vehicles/NBG", None));
+        assert!(may_share(Marked, "Vehicles/NBG", Some(true)));
+        assert!(may_share(Marked, "maps/Linka 400", None));
+        assert!(!may_share(Marked, "maps/Private", Some(false)));
+        assert!(may_share(All, "Vehicles/NBG", None));
+        assert!(!may_share(All, "Vehicles/Paid", Some(false)));
+        assert!(!may_share(Nothing, "maps/Linka 400", Some(true)));
+    }
 }
 
 #[cfg(test)]
