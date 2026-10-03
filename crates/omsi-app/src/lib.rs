@@ -93,6 +93,7 @@ mod traffic_link;
 mod tutorial;
 mod weather_setup;
 mod weather_cycle;
+mod vehicle_id;
 mod buse;
 mod world_load;
 

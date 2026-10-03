@@ -1683,7 +1683,10 @@ pub fn my_pose(
         id: 0,
         name: String::new(),
         bus: content_relative(&v.ty.def.path, &args.root),
-        paint: paint_name(args, &v.ty),
+        bus_id: crate::vehicle_id::of_file(&v.ty.def.path),
+        // the paint the bus has now: chosen at the start, for a bus placed later or changed
+        // in the game (sent as the start's `--paint` only, a placed bus went without one)
+        paint: v.host.paint_scheme.flatten().and_then(|i| v.ty.paint_schemes.get(i)).map(|s| s.name.clone()).unwrap_or_else(|| paint_name(args, &v.ty)),
         line,
         destination,
         tour: String::new(),
@@ -2224,7 +2227,14 @@ fn remote_type(
     let norm = |s: &str| s.trim().replace('\\', "/").to_ascii_lowercase();
     let listed = allowed.map(|l| l.iter().any(|v| norm(v) == norm(&pose.bus) || norm(&pose.bus).ends_with(&norm(v)))).unwrap_or(true);
     let loaded = if listed {
-        remote_bus_file(args, &pose.bus).and_then(|path| omsi_sim::VehicleType::load(&args.root, &path).map_err(|e| e.to_string()))
+        // by its path, else the same file under another folder of ours (its fingerprint)
+        remote_bus_file(args, &pose.bus)
+            .or_else(|e| {
+                crate::vehicle_id::find(&pose.bus_id, &args.root)
+                    .inspect(|p| log::info!("LAN: player {} drives {:?}: the same vehicle is {} here", pose.id, pose.bus, p.display()))
+                    .ok_or(e)
+            })
+            .and_then(|path| omsi_sim::VehicleType::load(&args.root, &path).map_err(|e| e.to_string()))
     } else {
         Err("the server does not offer it".to_string())
     };
@@ -2820,6 +2830,9 @@ pub fn tick(
     frame: &Frame,
 ) -> Vec<WorldUpdate> {
     let mut updates = Vec::new();
+    // (the vehicles of this machine by their fingerprint, for the others' buses: started now,
+    // ready by the time the first other player's bus is looked for, or soon after)
+    crate::vehicle_id::warm_up(&args.root);
     let mut mine = my_pose(game, player.as_deref(), args, duty, frame.riders);
     mine.tour = frame.tour.clone().unwrap_or_default();
     mine.walker = frame.walker;
@@ -2976,12 +2989,22 @@ pub fn tick(
         .map(|p| p.pose.clone())
         .collect();
     for pose in poses {
-        // another vehicle than before (the player changed buses): made again
-        if game
-            .remotes
-            .get(&pose.id)
-            .map(|rv| rv.last.bus != pose.bus)
-            .unwrap_or(false)
+        // another vehicle than before (the player changed buses) or another paint: made again;
+        // so is a stand-in once this machine's vehicles are fingerprinted and the same bus
+        // turns up under another folder (once per player and bus)
+        let refind = (pose.id, format!("refind:{}", pose.bus));
+        let found_now = game.remotes.get(&pose.id).is_some_and(|rv| rv.stand_in)
+            && !game.failed.contains_key(&refind)
+            && crate::vehicle_id::find(&pose.bus_id, &args.root).is_some();
+        if found_now {
+            game.failed.insert(refind, std::time::Instant::now());
+        }
+        if found_now
+            || game
+                .remotes
+                .get(&pose.id)
+                .map(|rv| rv.last.bus != pose.bus || !rv.last.paint.eq_ignore_ascii_case(&pose.paint))
+                .unwrap_or(false)
         {
             if let Some(rv) = game.remotes.remove(&pose.id) {
                 release(r, scene, w, frame.audio, rv);
@@ -3046,6 +3069,8 @@ pub fn tick(
                 // (who they are, what their bus shows: the newest state's)
                 ip.name = pose.name.clone();
                 ip.bus = pose.bus.clone();
+                ip.bus_id = pose.bus_id.clone();
+                ip.paint = pose.paint.clone();
                 ip.table = pose.table;
                 ip.line = pose.line.clone();
                 ip.destination = pose.destination.clone();

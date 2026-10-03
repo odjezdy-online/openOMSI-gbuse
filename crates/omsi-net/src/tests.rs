@@ -77,7 +77,7 @@ fn info_carries_the_freetex_pictures_and_an_older_info_has_none() {
     assert_eq!(q.freetex, p.freetex);
     assert_eq!(q.texts, p.texts);
     // an older game's INFO ends with the figure: no pictures, everything else as before
-    let older = text.rsplit_once('|').unwrap().0;
+    let older = text.rsplit_once('|').unwrap().0.rsplit_once('|').unwrap().0;
     let q = Pose::decode_info(&older.split('|').collect::<Vec<_>>()).unwrap();
     assert!(q.freetex.is_empty());
     assert_eq!(q.texts, p.texts);
@@ -85,7 +85,26 @@ fn info_carries_the_freetex_pictures_and_an_older_info_has_none() {
     p.freetex = (0..MAX_FREETEX).map(|k| format!("{k}{}", "é".repeat(200))).collect();
     p.bus = format!("Vehicles/{}/{}.bus", "Ü".repeat(60), "b".repeat(120));
     p.texts = (0..MAX_TEXTS).map(|k| format!("{k}ß{}", "ñ".repeat(40))).collect();
+    p.bus_id = "0123456789abcdef".into();
     assert!(p.encode_info().len() <= MAX_DATAGRAM);
+}
+
+#[test]
+fn info_carries_the_vehicle_files_fingerprint() {
+    let mut p = pose(1.5);
+    p.bus_id = "0123456789ABCDEF".into();
+    let text = p.encode_info();
+    let q = Pose::decode_info(&text.split('|').collect::<Vec<_>>()).unwrap();
+    assert_eq!(q.bus_id, "0123456789abcdef");
+    // a game that sends none (an older one), and nonsense in its place
+    let older = text.rsplit_once('|').unwrap().0;
+    assert_eq!(Pose::decode_info(&older.split('|').collect::<Vec<_>>()).unwrap().bus_id, "");
+    let odd = format!("{older}|../../x");
+    assert_eq!(Pose::decode_info(&odd.split('|').collect::<Vec<_>>()).unwrap().bus_id, "");
+    // a state that comes after the INFO keeps it
+    let mut kept = q.clone();
+    kept.set_state(pose(2.0));
+    assert_eq!(kept.bus_id, "0123456789abcdef");
 }
 
 #[test]
